@@ -4,16 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path"
+	"path/filepath"
+
+	"github.com/ipfs/go-ipfs/repo"
+
 	config "github.com/ipfs/go-ipfs-config"
 	"github.com/ipfs/go-ipfs/core"
 	"github.com/ipfs/go-ipfs/core/coreapi"
 	"github.com/ipfs/go-ipfs/namesys"
 	"github.com/ipfs/go-ipfs/plugin/loader"
 	"github.com/ipfs/go-ipfs/repo/fsrepo"
-	"github.com/ipfs/interface-go-ipfs-core"
-	"os"
-	"path"
-	"path/filepath"
+	iface "github.com/ipfs/interface-go-ipfs-core"
 )
 
 var (
@@ -22,10 +25,10 @@ var (
 )
 
 type IpfsManager struct {
-	nd       *core.IpfsNode
-	ndCtx    context.Context
-	ndCancel context.CancelFunc
-	API      iface.CoreAPI
+	nd        *core.IpfsNode
+	repo      repo.Repo
+	API       iface.CoreAPI
+	ndStarted bool
 }
 
 // NewIpfsManager creates a new IpfsManager. It will initialize IPFS if it's not initialized.
@@ -65,25 +68,41 @@ func NewIpfsManager(repoRoot string) (*IpfsManager, error) {
 		return nil, err
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	return &IpfsManager{repo: r}, nil
+}
+
+func (im *IpfsManager) StartNode() error {
+
+	ctx := context.Background()
 
 	cfg := &core.BuildCfg{
-		Repo:   r,
+		Repo:   im.repo,
 		Online: true,
 	}
 
-	nd, err := core.NewNode(ctx, cfg)
+	var err error
+	im.nd, err = core.NewNode(ctx, cfg)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	api, err := coreapi.NewCoreAPI(nd)
+	im.API, err = coreapi.NewCoreAPI(im.nd)
+	if err != nil {
+		return err
+	}
 
-	return &IpfsManager{nd: nd, ndCtx: ctx, ndCancel: cancel, API: api}, nil
+	return nil
 }
 
-func (im *IpfsManager) Close() {
-	im.ndCancel()
+func (im *IpfsManager) StopNode() error {
+	if err := im.nd.Close(); err != nil {
+		return err
+	}
+
+	im.nd = nil
+	im.API = nil
+
+	return nil
 }
 
 func checkWritable(dir string) error {

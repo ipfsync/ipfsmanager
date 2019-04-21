@@ -29,11 +29,24 @@ func TestIpfsManager(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unable to create IpfsManager. Error: %s", err)
 	}
-	defer im.Close()
+
+	err = im.StartNode()
+	if err != nil {
+		t.Fatalf("Unable to start Ipfs node. Error: %s", err)
+	}
 
 	keys, err := im.API.Key().List(context.TODO())
+	if err != nil {
+		t.Errorf("Unable to get key. Error: %s", err)
+	}
 
 	for _, key := range keys {
 		t.Logf("Key ID: %s", key.ID())
 	}
+
+	err = im.StopNode()
+	if err != nil {
+		t.Fatalf("Unable to stop Ipfs node. Error: %s", err)
+	}
+
 }
