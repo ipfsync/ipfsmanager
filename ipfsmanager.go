@@ -6,10 +6,14 @@ import (
 	"fmt"
 	config "github.com/ipfs/go-ipfs-config"
 	"github.com/ipfs/go-ipfs/core"
+	"github.com/ipfs/go-ipfs/core/coreapi"
 	"github.com/ipfs/go-ipfs/namesys"
+	"github.com/ipfs/go-ipfs/plugin/loader"
 	"github.com/ipfs/go-ipfs/repo/fsrepo"
+	"github.com/ipfs/interface-go-ipfs-core"
 	"os"
 	"path"
+	"path/filepath"
 )
 
 var (
@@ -17,12 +21,15 @@ var (
 	ErrIpfsDaemonLocked = errors.New("another IPFS daemon is running")
 )
 
-type IpfsManaer struct {
-	nd *core.IpfsNode
+type IpfsManager struct {
+	nd       *core.IpfsNode
+	ndCtx    context.Context
+	ndCancel context.CancelFunc
+	API      iface.CoreAPI
 }
 
 // NewIpfsManager creates a new IpfsManager. It will initialize IPFS if it's not initialized.
-func NewIpfsManager(repoRoot string) (*IpfsManaer, error) {
+func NewIpfsManager(repoRoot string) (*IpfsManager, error) {
 	daemonLocked, err := fsrepo.LockedByOtherProcess(repoRoot)
 	if err != nil {
 		return nil, err
@@ -32,6 +39,11 @@ func NewIpfsManager(repoRoot string) (*IpfsManaer, error) {
 	}
 
 	if err := checkWritable(repoRoot); err != nil {
+		return nil, err
+	}
+
+	_, err = loadPlugins(repoRoot)
+	if err != nil {
 		return nil, err
 	}
 
@@ -48,6 +60,30 @@ func NewIpfsManager(repoRoot string) (*IpfsManaer, error) {
 		}
 	}
 
+	r, err := fsrepo.Open(repoRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	cfg := &core.BuildCfg{
+		Repo:   r,
+		Online: true,
+	}
+
+	nd, err := core.NewNode(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	api, err := coreapi.NewCoreAPI(nd)
+
+	return &IpfsManager{nd: nd, ndCtx: ctx, ndCancel: cancel, API: api}, nil
+}
+
+func (im *IpfsManager) Close() {
+	im.ndCancel()
 }
 
 func checkWritable(dir string) error {
@@ -94,4 +130,45 @@ func initializeIpnsKeyspace(repoRoot string) error {
 	defer nd.Close()
 
 	return namesys.InitializeKeyspace(ctx, nd.Namesys, nd.Pinning, nd.PrivateKey)
+}
+
+func loadPlugins(repoPath string) (*loader.PluginLoader, error) {
+	pluginpath := filepath.Join(repoPath, "plugins")
+
+	// check if repo is accessible before loading plugins
+	var plugins *loader.PluginLoader
+	ok, err := checkPermissions(repoPath)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		pluginpath = ""
+	}
+	plugins, err = loader.NewPluginLoader(pluginpath)
+	if err != nil {
+		return nil, err
+	}
+	if err := plugins.Initialize(); err != nil {
+		return nil, err
+	}
+
+	if err := plugins.Inject(); err != nil {
+		return nil, err
+	}
+
+	return plugins, nil
+}
+
+func checkPermissions(path string) (bool, error) {
+	_, err := os.Open(path)
+	if os.IsNotExist(err) {
+		// repo does not exist yet - don't load plugins, but also don't fail
+		return false, nil
+	}
+	if os.IsPermission(err) {
+		// repo is not accessible. error out.
+		return false, fmt.Errorf("error opening repository at %s: permission denied", path)
+	}
+
+	return true, nil
 }
