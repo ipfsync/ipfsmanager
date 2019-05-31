@@ -3,10 +3,10 @@ package ipfsmanager
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
-	"path"
 	"path/filepath"
+
+	"github.com/ipfsync/common"
 
 	"github.com/ipfs/go-ipfs/repo"
 
@@ -41,7 +41,7 @@ func NewIpfsManager(repoRoot string) (*IpfsManager, error) {
 		return nil, ErrIpfsDaemonLocked
 	}
 
-	if err := checkWritable(repoRoot); err != nil {
+	if err := common.CheckWritable(repoRoot); err != nil {
 		return nil, err
 	}
 
@@ -105,34 +105,6 @@ func (im *IpfsManager) StopNode() error {
 	return nil
 }
 
-func checkWritable(dir string) error {
-	_, err := os.Stat(dir)
-	if err == nil {
-		// dir exists, make sure we can write to it
-		testfile := path.Join(dir, "test")
-		fi, err := os.Create(testfile)
-		if err != nil {
-			if os.IsPermission(err) {
-				return fmt.Errorf("%s is not writeable by the current user", dir)
-			}
-			return fmt.Errorf("unexpected error while checking writeablility of repo root: %s", err)
-		}
-		_ = fi.Close()
-		return os.Remove(testfile)
-	}
-
-	if os.IsNotExist(err) {
-		// dir doesn't exist, check that we can create it
-		return os.Mkdir(dir, 0775)
-	}
-
-	if os.IsPermission(err) {
-		return fmt.Errorf("cannot write to %s, incorrect permissions", err)
-	}
-
-	return err
-}
-
 func initializeIpnsKeyspace(repoRoot string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -156,7 +128,7 @@ func loadPlugins(repoPath string) (*loader.PluginLoader, error) {
 
 	// check if repo is accessible before loading plugins
 	var plugins *loader.PluginLoader
-	ok, err := checkPermissions(repoPath)
+	ok, err := common.CheckPermissions(repoPath)
 	if err != nil {
 		return nil, err
 	}
@@ -176,18 +148,4 @@ func loadPlugins(repoPath string) (*loader.PluginLoader, error) {
 	}
 
 	return plugins, nil
-}
-
-func checkPermissions(path string) (bool, error) {
-	_, err := os.Open(path)
-	if os.IsNotExist(err) {
-		// repo does not exist yet - don't load plugins, but also don't fail
-		return false, nil
-	}
-	if os.IsPermission(err) {
-		// repo is not accessible. error out.
-		return false, fmt.Errorf("error opening repository at %s: permission denied", path)
-	}
-
-	return true, nil
 }
